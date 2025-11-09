@@ -1,0 +1,47 @@
+const ethers = require('ethers')
+const UserModel = require('../models/User')
+const {PINATA_APIKEY,PINATA_SECRETKEY}=require('../config/serverConfig')
+const {generateEncryptionKey} = require('../utils/generateKey')
+const {encryptFile}=require('../utils/encryption')
+
+async function uploadImageController(req,res,next){
+    try {
+        const {fileName, fileDescription,folderName}=req.body;
+        const address = req.address;
+        const userAddress=address.toLowerCase()
+        const user=await UserModel.findOne({userAddress:userAddress})
+        if(!user){
+            throw new Error("User does not exist")
+        }
+        const folder = user.folders.find(f => f.folderName === folderName);
+        if (!folder) return res.status(404).json({ message: "Folder not found" });
+
+        // Save changes
+
+        if(user.encryptionKey===null){
+            const encryptionKey=generateEncryptionKey(32);
+            user.encryptionKey=encryptionKey;
+            await user.save()
+        }
+        const { encryptedData, iv } = encryptFile(req.file.buffer,user.encryptionKey);
+
+        const pinataSDK = require('@pinata/sdk');
+        const pinata = new pinataSDK({ pinataApiKey: PINATA_APIKEY, pinataSecretApiKey: PINATA_SECRETKEY });
+        const resPinata = await pinata.pinJSONToIPFS({encryptedData,iv})
+        // Add the new file
+        folder.files.push({
+            ipfsHash:resPinata.IpfsHash,
+            fileName,
+            fileDescription: fileDescription || "",
+        });
+    
+        await user.save();
+
+        res.status(200).json({ipfsHash:resPinata.IpfsHash,message:"Image Uploaded"})
+    } catch (error) {
+        console.error(error)
+        res.status(500).json({message:"Internal Server Error"})
+    }
+  
+}
+module.exports={uploadImageController}
